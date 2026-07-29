@@ -15,7 +15,6 @@ import org.springframework.transaction.annotation.Transactional;
  * commit would fail with UnexpectedRollbackException. The catch must happen
  * OUTSIDE the transaction boundary - and because Spring proxies don't
  * intercept self-invocation, "outside" means a separate bean.
- * (Interview question in the making.)
  */
 @Component
 public class EventWriter {

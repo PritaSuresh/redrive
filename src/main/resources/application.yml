@@ -2,7 +2,7 @@ spring:
   application:
     name: redrive
   datasource:
-    url: ${REDRIVE_DB_URL:jdbc:postgresql://localhost:5432/redrive}
+    url: ${REDRIVE_DB_URL:jdbc:postgresql://localhost:5433/redrive}
     username: ${REDRIVE_DB_USER:redrive}
     password: ${REDRIVE_DB_PASSWORD:redrive}
   jpa:
