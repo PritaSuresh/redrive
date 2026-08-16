@@ -1,5 +1,6 @@
 package dev.prita.redrive.common;
 
+import dev.prita.redrive.ingest.EventService.IdempotencyKeyConflictException;
 import java.time.Instant;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -26,6 +27,11 @@ public class ApiExceptions {
                 .map(f -> f.getField() + " " + f.getDefaultMessage())
                 .findFirst().orElse("validation failed");
         return error(HttpStatus.BAD_REQUEST, msg);
+    }
+
+    @ExceptionHandler(IdempotencyKeyConflictException.class)
+    ResponseEntity<Map<String, Object>> conflict(IdempotencyKeyConflictException e) {
+        return error(HttpStatus.CONFLICT, e.getMessage());
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

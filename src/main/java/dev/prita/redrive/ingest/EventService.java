@@ -37,16 +37,30 @@ public class EventService {
     public IngestResult ingest(String publisherId, String eventType, String payloadJson, String idempotencyKey) {
         var existing = events.findByPublisherIdAndIdempotencyKey(publisherId, idempotencyKey);
         if (existing.isPresent()) {
+            checkPayloadConflict(existing.get(), payloadJson, idempotencyKey);
             return new IngestResult(existing.get(), true);
         }
         try {
             return new IngestResult(writer.insert(publisherId, eventType, payloadJson, idempotencyKey), false);
         } catch (DataIntegrityViolationException e) {
-            // Lost the race against a concurrent duplicate: fetch the winner.
             log.debug("Concurrent duplicate ingest for publisher={} key={}", publisherId, idempotencyKey);
             var winner = events.findByPublisherIdAndIdempotencyKey(publisherId, idempotencyKey)
                     .orElseThrow(() -> e);
+            checkPayloadConflict(winner, payloadJson, idempotencyKey);
             return new IngestResult(winner, true);
+        }
+    }
+
+    private void checkPayloadConflict(EventRecord existing, String newPayloadJson, String idempotencyKey) {
+        String newHash = EventWriter.hashPayload(newPayloadJson);
+        if (!newHash.equals(existing.getPayloadHash())) {
+            throw new IdempotencyKeyConflictException(idempotencyKey);
+        }
+    }
+
+    public static class IdempotencyKeyConflictException extends RuntimeException {
+        public IdempotencyKeyConflictException(String key) {
+            super("Idempotency key '" + key + "' already used with a different payload");
         }
     }
 }

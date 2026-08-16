@@ -3,6 +3,10 @@ package dev.prita.redrive.ingest;
 import dev.prita.redrive.config.RedriveProperties;
 import dev.prita.redrive.outbox.OutboxRecord;
 import dev.prita.redrive.outbox.OutboxRepository;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,8 +41,18 @@ public class EventWriter {
     @Transactional
     public EventRecord insert(String publisherId, String eventType, String payloadJson, String idempotencyKey) {
         var event = events.save(
-                new EventRecord(UUID.randomUUID(), publisherId, eventType, payloadJson, idempotencyKey));
+                new EventRecord(UUID.randomUUID(), publisherId, eventType, payloadJson, idempotencyKey, hashPayload(payloadJson)));
         outbox.save(OutboxRecord.forEvent(event, props.topic()));
         return event;
+    }
+
+    public static String hashPayload(String payloadJson) {
+        try {
+            var digest = MessageDigest.getInstance("MD5");
+            byte[] hash = digest.digest(payloadJson.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("MD5 not available", e);
+        }
     }
 }
