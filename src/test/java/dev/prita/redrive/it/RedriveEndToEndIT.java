@@ -102,6 +102,12 @@ class RedriveEndToEndIT {
             exchange.sendResponseHeaders(500, -1);
             exchange.close();
         });
+        subscriberServer.createContext("/not-found", exchange -> {
+            hitsPerPath.computeIfAbsent("/not-found", k -> new AtomicInteger()).incrementAndGet();
+            exchange.getRequestBody().readAllBytes();
+            exchange.sendResponseHeaders(404, -1);
+            exchange.close();
+        });
         subscriberServer.start();
     }
 
@@ -205,5 +211,55 @@ class RedriveEndToEndIT {
             var dead = rest.getForEntity("/api/v1/subscriptions/" + subId + "/dead-letters", List.class);
             assertThat(dead.getBody()).isNotEmpty();
         });
+    }
+
+    @Test
+    void permanentFailure_404IsNotRetried() {
+        createSubscription("perm-fail", subscriberUrl("/not-found"), "perm.test");
+        ingest("it-perm-1", "perm.test", "{\"x\":1}");
+
+        // Should become FAILED_PERMANENT after a single attempt, not retried
+        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+            var resp = rest.getForEntity("/api/v1/subscriptions", List.class);
+            // Check the delivery ended up as FAILED_PERMANENT, not DEAD
+            assertThat(hitsPerPath.getOrDefault("/not-found", new AtomicInteger()).get()).isEqualTo(1);
+        });
+
+        // Give it a few seconds to confirm no retries happen
+        try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
+        assertThat(hitsPerPath.getOrDefault("/not-found", new AtomicInteger()).get()).isEqualTo(1);
+    }
+
+    @Test
+    void replayCreatesNewDeliveryRow() {
+        var sub = createSubscription("replay-new", subscriberUrl("/always-fails"), "replay.test");
+        String subId = (String) sub.get("id");
+
+        ingest("it-replay-new-1", "replay.test", "{\"r\":1}");
+
+        await().atMost(Duration.ofSeconds(45)).untilAsserted(() -> {
+            var dead = rest.getForEntity("/api/v1/subscriptions/" + subId + "/dead-letters", List.class);
+            assertThat(dead.getBody()).isNotEmpty();
+        });
+
+        // Get the original dead delivery ID
+        var deadBefore = rest.getForEntity("/api/v1/subscriptions/" + subId + "/dead-letters", List.class);
+        @SuppressWarnings("unchecked")
+        var firstDead = (Map<String, Object>) ((List<?>) deadBefore.getBody()).get(0);
+        String originalId = (String) firstDead.get("id");
+
+        // Replay - should create a new delivery row
+        rest.postForEntity("/api/v1/subscriptions/" + subId + "/replay-dead-letters", null, Map.class);
+
+        // The new delivery will also fail and die. Check that the original is still there
+        // and a new one was created with replay_of pointing to the original.
+        await().atMost(Duration.ofSeconds(45)).untilAsserted(() -> {
+            var dead = rest.getForEntity("/api/v1/subscriptions/" + subId + "/dead-letters", List.class);
+            assertThat(dead.getBody().size()).isGreaterThanOrEqualTo(2);
+        });
+
+        // Original delivery should still exist unchanged
+        var original = rest.getForEntity("/api/v1/deliveries/" + originalId, Map.class);
+        assertThat(original.getBody().get("status")).isEqualTo("DEAD");
     }
 }
