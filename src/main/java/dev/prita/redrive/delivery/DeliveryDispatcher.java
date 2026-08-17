@@ -155,6 +155,13 @@ public class DeliveryDispatcher {
                 endpointHealth.recordFailure(endpointKey);
                 failedAttemptCounter.increment();
                 tx.executeWithoutResult(s -> deliveries.findById(deliveryId).ifPresent(d -> {
+                    if (isPermanentFailure(failure.statusCode())) {
+                        d.markPermanentFailure(failure.statusCode());
+                        deliveries.save(d);
+                        log.info("Delivery {} permanently failed with HTTP {} (sub={})",
+                                d.getId(), failure.statusCode(), d.getSubscriptionId());
+                        return;
+                    }
                     var next = backoff.nextAttemptTime(d.getAttemptCount() + 1, failure.retryAfterSeconds());
                     d.recordFailure(failure.statusCode(), failure.error(), next, props.delivery().maxAttempts());
                     deliveries.save(d);
@@ -182,6 +189,13 @@ public class DeliveryDispatcher {
                 deliveries.save(d);
             }
         }));
+    }
+
+    private static final java.util.Set<Integer> PERMANENT_STATUS_CODES =
+            java.util.Set.of(400, 401, 403, 404, 410);
+
+    static boolean isPermanentFailure(Integer statusCode) {
+        return statusCode != null && PERMANENT_STATUS_CODES.contains(statusCode);
     }
 
     static String endpointKey(String url) {
