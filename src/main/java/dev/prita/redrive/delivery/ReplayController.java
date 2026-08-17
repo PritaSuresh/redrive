@@ -15,10 +15,8 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Delivery inspection + replay.
  *
- * Replay contract: replaying resets DEAD deliveries to PENDING with a fresh
- * attempt budget. The subscriber MAY therefore receive the same event again -
- * replay is explicitly a source of duplicates (same X-Redrive-Event-Id, new
- * attempt of the same X-Redrive-Delivery-Id).
+ * Replay creates a NEW delivery row linked to the original (replay_of),
+ * so failure history is preserved.
  */
 @RestController
 @RequestMapping("/api/v1")
@@ -49,20 +47,20 @@ public class ReplayController {
         if (d.getStatus() != Delivery.Status.DEAD) {
             throw new IllegalArgumentException("only DEAD deliveries can be replayed; status=" + d.getStatus());
         }
-        d.resetForReplay();
-        deliveries.save(d);
-        return ResponseEntity.accepted().body(toBody(d));
+        var replayed = deliveries.save(d.replayAs());
+        return ResponseEntity.accepted().body(toBody(replayed));
     }
 
     @PostMapping("/subscriptions/{subscriptionId}/replay-dead-letters")
     @Transactional
     public Map<String, Object> replayAllDead(@PathVariable UUID subscriptionId) {
         var dead = deliveries.findBySubscriptionIdAndStatus(subscriptionId, Delivery.Status.DEAD);
-        dead.forEach(d -> {
-            d.resetForReplay();
-            deliveries.save(d);
-        });
-        return Map.of("replayed", dead.size());
+        int count = 0;
+        for (var d : dead) {
+            deliveries.save(d.replayAs());
+            count++;
+        }
+        return Map.of("replayed", count);
     }
 
     private Map<String, Object> toBody(Delivery d) {
@@ -76,6 +74,7 @@ public class ReplayController {
         map.put("lastStatusCode", d.getLastStatusCode());
         map.put("lastError", d.getLastError());
         map.put("deliveredAt", d.getDeliveredAt() == null ? null : d.getDeliveredAt().toString());
+        map.put("replayOf", d.getReplayOf() == null ? null : d.getReplayOf().toString());
         return map;
     }
 }

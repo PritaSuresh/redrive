@@ -10,18 +10,18 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * Durable delivery state machine: one row per (event, subscription).
+ * Durable delivery state machine.
  *
  * PENDING --success--> DELIVERED
  *   |  ^
  *   |  '--retry with backoff (attempt_count++, next_attempt_at pushed out)
- *   '--max attempts exhausted--> DEAD  (the dead-letter set; replayable)
+ *   '--max attempts exhausted--> DEAD --replay--> new PENDING row (replay_of = original)
  */
 @Entity
 @Table(name = "deliveries")
 public class Delivery {
 
-    public enum Status { PENDING, DELIVERED, DEAD }
+    public enum Status { PENDING, DELIVERED, DEAD, FAILED_PERMANENT }
 
     @Id
     private UUID id;
@@ -57,6 +57,9 @@ public class Delivery {
     @Column(name = "delivered_at")
     private Instant deliveredAt;
 
+    @Column(name = "replay_of")
+    private UUID replayOf;
+
     protected Delivery() {}
 
     public Delivery(UUID eventId, UUID subscriptionId) {
@@ -89,18 +92,23 @@ public class Delivery {
         }
     }
 
+    public void markPermanentFailure(int statusCode) {
+        this.status = Status.FAILED_PERMANENT;
+        this.lastStatusCode = statusCode;
+        this.lastError = "HTTP " + statusCode;
+        this.updatedAt = Instant.now();
+    }
+
     /** Push the next attempt out WITHOUT consuming an attempt (breaker open / endpoint saturated). */
     public void deferTo(Instant nextAttempt) {
         this.nextAttemptAt = nextAttempt;
         this.updatedAt = Instant.now();
     }
 
-    public void resetForReplay() {
-        this.status = Status.PENDING;
-        this.attemptCount = 0;
-        this.nextAttemptAt = Instant.now();
-        this.updatedAt = Instant.now();
-        this.lastError = null;
+    public Delivery replayAs() {
+        var d = new Delivery(this.eventId, this.subscriptionId);
+        d.replayOf = this.id;
+        return d;
     }
 
     private static String truncate(String s) {
@@ -118,4 +126,5 @@ public class Delivery {
     public String getLastError() { return lastError; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getDeliveredAt() { return deliveredAt; }
+    public UUID getReplayOf() { return replayOf; }
 }
